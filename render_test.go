@@ -159,6 +159,85 @@ func TestToText_MixedBlocks(t *testing.T) {
 	}
 }
 
+func TestToMarkdown_RelatedPartsNotesAndFormatting(t *testing.T) {
+	t.Parallel()
+
+	data := testutil.BuildDocx(t, `
+<w:p>
+  <w:pPr><w:pStyle w:val="Heading1"/></w:pPr>
+  <w:r><w:t>Title</w:t></w:r>
+</w:p>
+<w:p>
+  <w:r><w:rPr><w:b/></w:rPr><w:t>Body</w:t></w:r>
+  <w:r><w:t xml:space="preserve"> with </w:t></w:r>
+  <w:hyperlink r:id="rIdLink"><w:r><w:t>link</w:t></w:r></w:hyperlink>
+  <w:r><w:footnoteReference w:id="2"/></w:r>
+</w:p>`, `
+<Relationship Id="rIdHeader" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>
+<Relationship Id="rIdFooter" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>
+<Relationship Id="rIdFootnotes" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes" Target="footnotes.xml"/>
+<Relationship Id="rIdLink" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com" TargetMode="External"/>`,
+		testutil.File{Name: "word/header1.xml", Data: testutil.WordPartXML("hdr", `<w:p><w:r><w:t>Header</w:t></w:r></w:p>`)},
+		testutil.File{Name: "word/footer1.xml", Data: testutil.WordPartXML("ftr", `<w:p><w:r><w:t>Footer</w:t></w:r></w:p>`)},
+		testutil.File{Name: "word/footnotes.xml", Data: testutil.WordPartXML("footnotes", `<w:footnote w:id="2"><w:p><w:r><w:t>Footnote text</w:t></w:r></w:p></w:footnote>`)},
+	)
+	doc, err := OpenReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatalf("OpenReader() error = %v", err)
+	}
+
+	want := "Header\n\n# Title\n\n**Body** with [link](https://example.com)[^fn2]\n\nFooter\n\n[^fn2]: Footnote text\n"
+	if got := doc.ToMarkdown(); got != want {
+		t.Fatalf("ToMarkdown() = %q, want %q", got, want)
+	}
+}
+
+func TestChunks_MetadataListAndTable(t *testing.T) {
+	t.Parallel()
+
+	doc := openNumberedDoc(t, `
+<w:p>
+  <w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr>
+  <w:r><w:t>first</w:t></w:r>
+</w:p>
+<w:tbl>
+  <w:tblGrid><w:gridCol/><w:gridCol/></w:tblGrid>
+  <w:tr>`+tc("A")+tc("B")+`</w:tr>
+</w:tbl>`, decimalNumberingXML())
+
+	chunks := doc.Chunks()
+	if len(chunks) != 4 {
+		t.Fatalf("len(Chunks()) = %d, want 4: %#v", len(chunks), chunks)
+	}
+	list := chunks[0]
+	if list.ID != "body:body/0" || list.Index != 0 || list.Source != "body" || list.Path != "body/0" {
+		t.Fatalf("list chunk identity = %#v", list)
+	}
+	if list.Kind != "list-item" || list.Level != 0 || list.Text != "first" || list.Markdown != "1. first" {
+		t.Fatalf("list chunk content = %#v", list)
+	}
+	if list.List == nil || list.List.Marker != "1." || list.List.Ordinal != 1 || list.List.Format != "decimal" {
+		t.Fatalf("list metadata = %#v, want decimal marker", list.List)
+	}
+
+	row := chunks[1]
+	if row.Kind != "table-row" || row.Text != "A\tB" || row.Markdown != "| A | B |" {
+		t.Fatalf("row chunk content = %#v", row)
+	}
+	if row.Table == nil || row.Table.ID != 1 || row.Table.Row != 0 || row.Table.Column != -1 || row.Table.Columns != 2 {
+		t.Fatalf("row table metadata = %#v", row.Table)
+	}
+	if row.TableID != 1 {
+		t.Fatalf("row.TableID = %d, want 1", row.TableID)
+	}
+	if chunks[2].Path != "body/1/row/0/cell/0/0" || chunks[2].Text != "A" {
+		t.Fatalf("cell 0 nested paragraph chunk = %#v", chunks[2])
+	}
+	if chunks[3].Path != "body/1/row/0/cell/1/0" || chunks[3].Text != "B" {
+		t.Fatalf("cell 1 nested paragraph chunk = %#v", chunks[3])
+	}
+}
+
 func openDoc(t *testing.T, bodyXML string) *Document {
 	t.Helper()
 

@@ -31,8 +31,22 @@ type Run struct {
 	Tab                     bool
 	Break                   bool
 	Image                   *ImageRef
+	Note                    *NoteRef
 	Link                    string
 }
+
+// NoteRef is a footnote or endnote reference found in a run.
+type NoteRef struct {
+	Kind string
+	ID   string
+}
+
+const (
+	// NoteKindFootnote identifies a footnote reference or chunk source.
+	NoteKindFootnote = "footnote"
+	// NoteKindEndnote identifies an endnote reference or chunk source.
+	NoteKindEndnote = "endnote"
+)
 
 // Table is a rectangular table grid.
 type Table struct {
@@ -62,6 +76,8 @@ const (
 
 // Image is an embedded document image loaded from the DOCX package.
 type Image struct {
+	ID          string
+	PartName    string
 	RelID       string
 	ContentType string
 	Filename    string
@@ -71,6 +87,8 @@ type Image struct {
 
 // ImageRef is a lazy reference to an embedded image found in a run.
 type ImageRef struct {
+	ID                  string
+	PartName            string
 	RelID               string
 	Filename            string
 	AltText             string
@@ -79,9 +97,51 @@ type ImageRef struct {
 
 // Chunk is an ordered RAG ingestion unit derived from document blocks.
 type Chunk struct {
-	Kind    string
-	Level   int
-	Text    string
+	ID       string
+	Index    int
+	Kind     string
+	Source   string
+	SourceID string
+	Path     string
+	Level    int
+	Text     string
+	Markdown string
+	StyleID  string
+	List     *ChunkList
+	Table    *ChunkTable
+	Image    *ChunkImage
+	Notes    []NoteRef
+
+	// TableID and ImageID are retained for callers using the preliminary API.
 	TableID int
 	ImageID string
+}
+
+// ChunkList describes list metadata for a paragraph chunk.
+type ChunkList struct {
+	NumID     int
+	Level     int
+	Format    string
+	LevelText string
+	Ordinal   int
+	Marker    string
+}
+
+// ChunkTable describes table position metadata for a chunk.
+type ChunkTable struct {
+	ID      int
+	Row     int
+	Column  int
+	Columns int
+}
+
+// ChunkImage describes image metadata for a chunk.
+type ChunkImage struct {
+	ID        string
+	PartName  string
+	RelID     string
+	Filename  string
+	AltText   string
+	WidthEMU  int64
+	HeightEMU int64
 }

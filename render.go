@@ -2,6 +2,7 @@ package godocx
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -16,16 +17,42 @@ func (d *Document) ToText() string {
 // ToMarkdown returns a markdown linearization suitable for embedding/indexing.
 func (d *Document) ToMarkdown() string {
 	var b strings.Builder
+	for _, id := range sortedBlockKeys(d.Headers) {
+		writeBlocksMarkdown(&b, d.Headers[id])
+		ensureBlankLine(&b)
+	}
 	writeBlocksMarkdown(&b, d.Body)
-	return b.String()
+	ensureBlankLine(&b)
+	for _, id := range sortedBlockKeys(d.Footers) {
+		writeBlocksMarkdown(&b, d.Footers[id])
+		ensureBlankLine(&b)
+	}
+	writeNoteDefinitionsMarkdown(&b, NoteKindFootnote, d.Footnotes)
+	writeNoteDefinitionsMarkdown(&b, NoteKindEndnote, d.Endnotes)
+	result := strings.TrimRight(b.String(), "\n")
+	if result == "" {
+		return ""
+	}
+	return result + "\n"
 }
 
 // Chunks returns ordered chunks ready for RAG ingestion.
 func (d *Document) Chunks() []Chunk {
-	var chunks []Chunk
-	tableID := 0
-	appendChunks(&chunks, d.Body, &tableID)
-	return chunks
+	builder := chunkBuilder{}
+	for _, id := range sortedBlockKeys(d.Headers) {
+		builder.appendBlocks(d.Headers[id], chunkSource{kind: "header", id: id, path: "headers/" + id})
+	}
+	builder.appendBlocks(d.Body, chunkSource{kind: "body", path: "body"})
+	for _, id := range sortedBlockKeys(d.Footers) {
+		builder.appendBlocks(d.Footers[id], chunkSource{kind: "footer", id: id, path: "footers/" + id})
+	}
+	for _, id := range sortedNoteKeys(d.Footnotes) {
+		builder.appendBlocks(d.Footnotes[id], chunkSource{kind: NoteKindFootnote, id: id, path: "footnotes/" + id})
+	}
+	for _, id := range sortedNoteKeys(d.Endnotes) {
+		builder.appendBlocks(d.Endnotes[id], chunkSource{kind: NoteKindEndnote, id: id, path: "endnotes/" + id})
+	}
+	return builder.chunks
 }
 
 func writeBlocksText(b *strings.Builder, blocks []Block) {
@@ -62,33 +89,168 @@ func writeBlocksMarkdown(b *strings.Builder, blocks []Block) {
 	for _, block := range blocks {
 		switch value := block.(type) {
 		case *Paragraph:
-			writeParagraphMarkdown(b, value)
+			markdown := paragraphMarkdown(value)
+			if markdown == "" {
+				continue
+			}
+			b.WriteString(markdown)
 			b.WriteString("\n\n")
 		case *Table:
+			if b.Len() > 0 {
+				ensureBlankLine(b)
+			}
 			writeTableMarkdown(b, value)
 			b.WriteByte('\n')
 		}
 	}
 }
 
-func writeParagraphMarkdown(b *strings.Builder, paragraph *Paragraph) {
-	text := paragraphText(paragraph)
+func paragraphMarkdown(paragraph *Paragraph) string {
+	text := paragraphInlineMarkdown(paragraph)
 	if paragraph.HeadingLvl > 0 {
+		var b strings.Builder
 		b.WriteString(strings.Repeat("#", paragraph.HeadingLvl))
 		b.WriteByte(' ')
 		b.WriteString(text)
-		return
+		return b.String()
 	}
+	var b strings.Builder
 	if paragraph.List != nil {
 		b.WriteString(strings.Repeat("  ", paragraph.List.Level))
-		if paragraph.List.Format == "decimal" {
-			b.WriteString(strconv.Itoa(paragraph.List.Ordinal))
-			b.WriteString(". ")
-		} else {
-			b.WriteString("- ")
+		marker := listMarker(paragraph.List)
+		if marker != "" {
+			b.WriteString(marker)
+			b.WriteByte(' ')
 		}
 	}
 	b.WriteString(text)
+	return b.String()
+}
+
+func paragraphInlineMarkdown(paragraph *Paragraph) string {
+	var b strings.Builder
+	for _, run := range paragraph.Runs {
+		b.WriteString(runMarkdown(run))
+	}
+	return b.String()
+}
+
+func listMarker(list *ListRef) string {
+	if list == nil {
+		return ""
+	}
+	switch list.Format {
+	case "bullet":
+		return "-"
+	case "none":
+		return ""
+	default:
+		return formatOrdinal(list.Format, list.Ordinal) + "."
+	}
+}
+
+func writeNoteDefinitionsMarkdown(b *strings.Builder, kind string, notes map[string][]Block) {
+	for _, id := range sortedNoteKeys(notes) {
+		text := blocksMarkdownInline(notes[id])
+		if text == "" {
+			continue
+		}
+		ensureBlankLine(b)
+		b.WriteString(noteMarkdownRef(NoteRef{Kind: kind, ID: id}))
+		b.WriteString(": ")
+		b.WriteString(text)
+		b.WriteByte('\n')
+	}
+}
+
+func blocksMarkdownInline(blocks []Block) string {
+	var parts []string
+	for _, block := range blocks {
+		switch value := block.(type) {
+		case *Paragraph:
+			if text := paragraphInlineMarkdown(value); text != "" {
+				parts = append(parts, text)
+			}
+		case *Table:
+			if text := tablePlainText(value); text != "" {
+				parts = append(parts, escapeMarkdownText(text))
+			}
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+func runMarkdown(run Run) string {
+	switch {
+	case run.Image != nil:
+		altText := escapeMarkdownText(run.Image.AltText)
+		target := run.Image.Filename
+		if target == "" {
+			target = run.Image.ID
+		}
+		if target == "" {
+			target = run.Image.RelID
+		}
+		return "![" + altText + "](" + escapeMarkdownURL(target) + ")"
+	case run.Note != nil:
+		return noteMarkdownRef(*run.Note)
+	case run.Tab:
+		return "\t"
+	case run.Break:
+		return "\n"
+	default:
+		text := escapeMarkdownText(run.Text)
+		if text == "" {
+			return ""
+		}
+		if run.Link != "" {
+			text = "[" + text + "](" + escapeMarkdownURL(run.Link) + ")"
+		}
+		if run.Underline {
+			text = "<u>" + text + "</u>"
+		}
+		if run.Italic {
+			text = "*" + text + "*"
+		}
+		if run.Bold {
+			text = "**" + text + "**"
+		}
+		return text
+	}
+}
+
+func noteMarkdownRef(note NoteRef) string {
+	switch note.Kind {
+	case NoteKindEndnote:
+		return "[^en" + note.ID + "]"
+	default:
+		return "[^fn" + note.ID + "]"
+	}
+}
+
+func escapeMarkdownText(text string) string {
+	replacer := strings.NewReplacer(
+		`\`, `\\`,
+		`*`, `\*`,
+		`_`, `\_`,
+		`[`, `\[`,
+		`]`, `\]`,
+		"`", "\\`",
+	)
+	return replacer.Replace(text)
+}
+
+func escapeMarkdownURL(url string) string {
+	url = strings.ReplaceAll(url, `\`, `%5C`)
+	url = strings.ReplaceAll(url, ")", "%29")
+	url = strings.ReplaceAll(url, " ", "%20")
+	return url
+}
+
+func tablePlainText(table *Table) string {
+	var b strings.Builder
+	writeTableText(&b, table)
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // formatOrdinal renders n in the given OOXML numFmt. Unknown formats fall back to decimal.
@@ -126,7 +288,7 @@ func writeMarkdownRow(b *strings.Builder, row []Cell) {
 	b.WriteByte('|')
 	for _, cell := range row {
 		b.WriteByte(' ')
-		b.WriteString(escapeMarkdownCell(cellText(cell)))
+		b.WriteString(escapeMarkdownCell(cellMarkdown(cell)))
 		b.WriteString(" |")
 	}
 	b.WriteByte('\n')
@@ -140,54 +302,163 @@ func writeMarkdownSeparator(b *strings.Builder, cols int) {
 	b.WriteByte('\n')
 }
 
-func appendChunks(chunks *[]Chunk, blocks []Block, tableID *int) {
-	for _, block := range blocks {
+type chunkSource struct {
+	kind string
+	id   string
+	path string
+}
+
+type chunkBuilder struct {
+	chunks  []Chunk
+	tableID int
+}
+
+func (b *chunkBuilder) appendBlocks(blocks []Block, source chunkSource) {
+	for i, block := range blocks {
+		path := source.child(strconv.Itoa(i))
 		switch value := block.(type) {
 		case *Paragraph:
-			text := paragraphText(value)
-			kind := "paragraph"
-			level := value.HeadingLvl
-			if value.HeadingLvl > 0 {
-				kind = "heading"
-			}
-			if value.List != nil {
-				kind = "list-item"
-				level = value.List.Level
-			}
-			if text != "" {
-				*chunks = append(*chunks, Chunk{Kind: kind, Level: level, Text: text})
-			}
-			for _, run := range value.Runs {
-				if run.Image != nil {
-					*chunks = append(*chunks, Chunk{
-						Kind:    "image",
-						Text:    run.Image.AltText,
-						ImageID: run.Image.RelID,
-					})
-				}
-			}
+			b.appendParagraph(value, source, path)
 		case *Table:
-			*tableID++
-			currentID := *tableID
-			for _, row := range value.Grid {
-				var b strings.Builder
-				for i, cell := range row {
-					if i > 0 {
-						b.WriteByte('\t')
-					}
-					b.WriteString(cellText(cell))
-				}
-				*chunks = append(*chunks, Chunk{
-					Kind:    "table-row",
-					Text:    b.String(),
-					TableID: currentID,
-				})
-				for _, cell := range row {
-					appendChunks(chunks, cell.Blocks, tableID)
-				}
-			}
+			b.appendTable(value, source, path)
 		}
 	}
+}
+
+func (b *chunkBuilder) appendParagraph(paragraph *Paragraph, source chunkSource, path string) {
+	text := paragraphText(paragraph)
+	markdown := paragraphMarkdown(paragraph)
+	kind := "paragraph"
+	level := paragraph.HeadingLvl
+	if paragraph.HeadingLvl > 0 {
+		kind = "heading"
+	}
+	var list *ChunkList
+	if paragraph.List != nil {
+		kind = "list-item"
+		level = paragraph.List.Level
+		list = &ChunkList{
+			NumID:     paragraph.List.NumID,
+			Level:     paragraph.List.Level,
+			Format:    paragraph.List.Format,
+			LevelText: paragraph.List.LevelText,
+			Ordinal:   paragraph.List.Ordinal,
+			Marker:    listMarker(paragraph.List),
+		}
+	}
+	if text != "" || markdown != "" {
+		b.appendChunk(Chunk{
+			Kind:     kind,
+			Level:    level,
+			Text:     text,
+			Markdown: markdown,
+			StyleID:  paragraph.StyleID,
+			List:     list,
+			Notes:    paragraphNoteRefs(paragraph),
+		}, source, path)
+	}
+	for runIndex, run := range paragraph.Runs {
+		if run.Image == nil {
+			continue
+		}
+		image := ChunkImage{
+			ID:        run.Image.ID,
+			PartName:  run.Image.PartName,
+			RelID:     run.Image.RelID,
+			Filename:  run.Image.Filename,
+			AltText:   run.Image.AltText,
+			WidthEMU:  run.Image.WidthEMU,
+			HeightEMU: run.Image.HeightEMU,
+		}
+		imageID := image.ID
+		if imageID == "" {
+			imageID = run.Image.RelID
+		}
+		b.appendChunk(Chunk{
+			Kind:     "image",
+			Text:     run.Image.AltText,
+			Markdown: runMarkdown(run),
+			Image:    &image,
+			ImageID:  imageID,
+		}, source, path+"/image/"+strconv.Itoa(runIndex))
+	}
+}
+
+func (b *chunkBuilder) appendTable(table *Table, source chunkSource, path string) {
+	b.tableID++
+	currentID := b.tableID
+	for rowIndex, row := range table.Grid {
+		text := rowText(row)
+		markdown := rowMarkdown(row)
+		b.appendChunk(Chunk{
+			Kind:     "table-row",
+			Text:     text,
+			Markdown: markdown,
+			Table: &ChunkTable{
+				ID:      currentID,
+				Row:     rowIndex,
+				Column:  -1,
+				Columns: len(row),
+			},
+			TableID: currentID,
+		}, source, path+"/row/"+strconv.Itoa(rowIndex))
+		for cellIndex, cell := range row {
+			cellSource := source
+			cellSource.path = path + "/row/" + strconv.Itoa(rowIndex) + "/cell/" + strconv.Itoa(cellIndex)
+			b.appendBlocks(cell.Blocks, cellSource)
+		}
+	}
+}
+
+func (b *chunkBuilder) appendChunk(chunk Chunk, source chunkSource, path string) {
+	chunk.Index = len(b.chunks)
+	chunk.Source = source.kind
+	chunk.SourceID = source.id
+	chunk.Path = path
+	chunk.ID = chunkID(source, path)
+	b.chunks = append(b.chunks, chunk)
+}
+
+func (s chunkSource) child(part string) string {
+	if s.path == "" {
+		return part
+	}
+	return s.path + "/" + part
+}
+
+func chunkID(source chunkSource, path string) string {
+	if source.id == "" {
+		return source.kind + ":" + path
+	}
+	return source.kind + ":" + source.id + ":" + path
+}
+
+func paragraphNoteRefs(paragraph *Paragraph) []NoteRef {
+	var notes []NoteRef
+	for _, run := range paragraph.Runs {
+		if run.Note == nil {
+			continue
+		}
+		notes = append(notes, *run.Note)
+	}
+	return notes
+}
+
+func rowText(row []Cell) string {
+	var b strings.Builder
+	for i, cell := range row {
+		if i > 0 {
+			b.WriteByte('\t')
+		}
+		b.WriteString(cellText(cell))
+	}
+	return b.String()
+}
+
+func rowMarkdown(row []Cell) string {
+	var b strings.Builder
+	writeMarkdownRow(&b, row)
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func paragraphText(paragraph *Paragraph) string {
@@ -224,6 +495,10 @@ func cellText(cell Cell) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+func cellMarkdown(cell Cell) string {
+	return blocksMarkdownInline(cell.Blocks)
+}
+
 func tableCellText(cell Cell, nestedIndent int) string {
 	var parts []string
 	hasNestedTable := false
@@ -239,7 +514,7 @@ func tableCellText(cell Cell, nestedIndent int) string {
 
 	text := strings.Join(parts, "\n")
 	if hasNestedTable {
-		// TODO: nested-table-in-row plaintext rendering is approximate.
+		// Preserve nested table row breaks rather than flattening structure away.
 		return text
 	}
 	text = strings.ReplaceAll(text, "\n", " ")
@@ -265,6 +540,9 @@ func nestedTableText(table *Table, indent int) string {
 }
 
 func ensureBlankLine(b *strings.Builder) {
+	if b.Len() == 0 {
+		return
+	}
 	text := b.String()
 	if strings.HasSuffix(text, "\n\n") {
 		return
@@ -284,6 +562,15 @@ func writeRunText(b *strings.Builder, run Run) {
 		}
 		b.WriteString("[image: ")
 		b.WriteString(filename)
+		b.WriteByte(']')
+	case run.Note != nil:
+		switch run.Note.Kind {
+		case NoteKindEndnote:
+			b.WriteString("[endnote: ")
+		default:
+			b.WriteString("[footnote: ")
+		}
+		b.WriteString(run.Note.ID)
 		b.WriteByte(']')
 	case run.Tab:
 		b.WriteByte('\t')
@@ -356,4 +643,26 @@ func escapeMarkdownCell(text string) string {
 	text = strings.ReplaceAll(text, `|`, `\|`)
 	text = strings.ReplaceAll(text, "\n", "<br>")
 	return text
+}
+
+func sortedBlockKeys(values map[string][]Block) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func sortedNoteKeys(values map[string][]Block) []string {
+	keys := sortedBlockKeys(values)
+	sort.SliceStable(keys, func(i, j int) bool {
+		left, leftErr := strconv.Atoi(keys[i])
+		right, rightErr := strconv.Atoi(keys[j])
+		if leftErr == nil && rightErr == nil {
+			return left < right
+		}
+		return keys[i] < keys[j]
+	})
+	return keys
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/venosm/pure-go-docx/internal/numbering"
 	"github.com/venosm/pure-go-docx/internal/opc"
@@ -22,10 +23,16 @@ type parser struct {
 	depth         int
 	relationships map[string]opc.Relationship
 	numbering     *numbering.Resolver
+	sourcePart    string
 }
 
 // Parse reads the main WordprocessingML document body into blocks.
 func Parse(ctx context.Context, r io.Reader, relationships map[string]opc.Relationship, resolver *numbering.Resolver) ([]Block, error) {
+	return ParseDocument(ctx, r, relationships, resolver, "")
+}
+
+// ParseDocument reads a WordprocessingML main document part into blocks.
+func ParseDocument(ctx context.Context, r io.Reader, relationships map[string]opc.Relationship, resolver *numbering.Resolver, sourcePart string) ([]Block, error) {
 	dec := xml.NewDecoder(r)
 	dec.Strict = false
 	dec.Entity = xml.HTMLEntity
@@ -35,25 +42,82 @@ func Parse(ctx context.Context, r io.Reader, relationships map[string]opc.Relati
 		dec:           dec,
 		relationships: relationships,
 		numbering:     resolver,
+		sourcePart:    sourcePart,
 	}
+	if err := p.seekRoot("document"); err != nil {
+		return nil, err
+	}
+	return p.parseDocument()
+}
 
+// ParseHeader reads a WordprocessingML header part into blocks.
+func ParseHeader(ctx context.Context, r io.Reader, relationships map[string]opc.Relationship, resolver *numbering.Resolver, sourcePart string) ([]Block, error) {
+	return parseRootBlocks(ctx, r, relationships, resolver, sourcePart, "hdr")
+}
+
+// ParseFooter reads a WordprocessingML footer part into blocks.
+func ParseFooter(ctx context.Context, r io.Reader, relationships map[string]opc.Relationship, resolver *numbering.Resolver, sourcePart string) ([]Block, error) {
+	return parseRootBlocks(ctx, r, relationships, resolver, sourcePart, "ftr")
+}
+
+// ParseFootnotes reads a WordprocessingML footnotes part into blocks keyed by note ID.
+func ParseFootnotes(ctx context.Context, r io.Reader, relationships map[string]opc.Relationship, resolver *numbering.Resolver, sourcePart string) (map[string][]Block, error) {
+	return parseNotes(ctx, r, relationships, resolver, sourcePart, "footnotes", "footnote")
+}
+
+// ParseEndnotes reads a WordprocessingML endnotes part into blocks keyed by note ID.
+func ParseEndnotes(ctx context.Context, r io.Reader, relationships map[string]opc.Relationship, resolver *numbering.Resolver, sourcePart string) (map[string][]Block, error) {
+	return parseNotes(ctx, r, relationships, resolver, sourcePart, "endnotes", "endnote")
+}
+
+func newParser(ctx context.Context, r io.Reader, relationships map[string]opc.Relationship, resolver *numbering.Resolver, sourcePart string) *parser {
+	dec := xml.NewDecoder(r)
+	dec.Strict = false
+	dec.Entity = xml.HTMLEntity
+
+	return &parser{
+		ctx:           ctx,
+		dec:           dec,
+		relationships: relationships,
+		numbering:     resolver,
+		sourcePart:    sourcePart,
+	}
+}
+
+func parseRootBlocks(ctx context.Context, r io.Reader, relationships map[string]opc.Relationship, resolver *numbering.Resolver, sourcePart, rootLocal string) ([]Block, error) {
+	p := newParser(ctx, r, relationships, resolver, sourcePart)
+	if err := p.seekRoot(rootLocal); err != nil {
+		return nil, err
+	}
+	return p.parseBlocksUntil(rootLocal)
+}
+
+func parseNotes(ctx context.Context, r io.Reader, relationships map[string]opc.Relationship, resolver *numbering.Resolver, sourcePart, rootLocal, noteLocal string) (map[string][]Block, error) {
+	p := newParser(ctx, r, relationships, resolver, sourcePart)
+	if err := p.seekRoot(rootLocal); err != nil {
+		return nil, err
+	}
+	return p.parseNotes(rootLocal, noteLocal)
+}
+
+func (p *parser) seekRoot(rootLocal string) error {
 	for {
 		tok, err := p.next()
 		if errors.Is(err, io.EOF) {
-			return nil, errors.New("document root not found")
+			return fmt.Errorf("%s root not found", rootLocal)
 		}
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		se, ok := tok.(xml.StartElement)
-		if !ok || se.Name.Local != "document" {
+		if !ok || se.Name.Local != rootLocal {
 			continue
 		}
-		if se.Name.Space != wordprocessingNamespace {
-			return nil, fmt.Errorf("unexpected document namespace %q", se.Name.Space)
+		if se.Name.Space != "" && se.Name.Space != wordprocessingNamespace {
+			return fmt.Errorf("unexpected %s namespace %q", rootLocal, se.Name.Space)
 		}
-		return p.parseDocument()
+		return nil
 	}
 }
 
@@ -109,6 +173,12 @@ func (p *parser) parseBlocksUntil(endLocal string) ([]Block, error) {
 					return nil, err
 				}
 				blocks = append(blocks, sdtBlocks...)
+			case "AlternateContent":
+				alternateBlocks, err := p.parseAlternateContentBlocks()
+				if err != nil {
+					return nil, err
+				}
+				blocks = append(blocks, alternateBlocks...)
 			case "sectPr":
 				if err := p.skipElement(t); err != nil {
 					return nil, err
@@ -120,6 +190,94 @@ func (p *parser) parseBlocksUntil(endLocal string) ([]Block, error) {
 			}
 		case xml.EndElement:
 			if t.Name.Local == endLocal {
+				return blocks, nil
+			}
+		}
+	}
+}
+
+func (p *parser) parseNotes(rootLocal, noteLocal string) (map[string][]Block, error) {
+	notes := make(map[string][]Block)
+	for {
+		tok, err := p.next()
+		if err != nil {
+			return nil, err
+		}
+
+		switch t := tok.(type) {
+		case xml.StartElement:
+			if t.Name.Local != noteLocal {
+				if err := p.skipElement(t); err != nil {
+					return nil, err
+				}
+				continue
+			}
+
+			id := attr(t, "id")
+			if id == "" || strings.HasPrefix(id, "-") || ignoredNoteType(attr(t, "type")) {
+				if err := p.skipElement(t); err != nil {
+					return nil, err
+				}
+				continue
+			}
+			blocks, err := p.parseBlocksUntil(noteLocal)
+			if err != nil {
+				return nil, err
+			}
+			notes[id] = blocks
+		case xml.EndElement:
+			if t.Name.Local == rootLocal {
+				return notes, nil
+			}
+		}
+	}
+}
+
+func (p *parser) parseAlternateContentBlocks() ([]Block, error) {
+	var blocks []Block
+	chosen := false
+	for {
+		tok, err := p.next()
+		if err != nil {
+			return nil, err
+		}
+
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "Choice":
+				if chosen {
+					if err := p.skipElement(t); err != nil {
+						return nil, err
+					}
+					continue
+				}
+				choiceBlocks, err := p.parseBlocksUntil("Choice")
+				if err != nil {
+					return nil, err
+				}
+				blocks = choiceBlocks
+				chosen = true
+			case "Fallback":
+				if chosen {
+					if err := p.skipElement(t); err != nil {
+						return nil, err
+					}
+					continue
+				}
+				fallbackBlocks, err := p.parseBlocksUntil("Fallback")
+				if err != nil {
+					return nil, err
+				}
+				blocks = fallbackBlocks
+				chosen = true
+			default:
+				if err := p.skipElement(t); err != nil {
+					return nil, err
+				}
+			}
+		case xml.EndElement:
+			if t.Name.Local == "AlternateContent" {
 				return blocks, nil
 			}
 		}
@@ -209,4 +367,13 @@ func attr(se xml.StartElement, local string) string {
 		}
 	}
 	return ""
+}
+
+func ignoredNoteType(noteType string) bool {
+	switch noteType {
+	case "separator", "continuationSeparator", "continuationNotice":
+		return true
+	default:
+		return false
+	}
 }

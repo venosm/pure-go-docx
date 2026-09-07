@@ -16,6 +16,14 @@ const (
 	HyperlinkRelationshipType = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink"
 	// NumberingRelationshipType is the OOXML relationship type for numbering definitions.
 	NumberingRelationshipType = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering"
+	// HeaderRelationshipType is the OOXML relationship type for header parts.
+	HeaderRelationshipType = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/header"
+	// FooterRelationshipType is the OOXML relationship type for footer parts.
+	FooterRelationshipType = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer"
+	// FootnotesRelationshipType is the OOXML relationship type for footnotes parts.
+	FootnotesRelationshipType = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes"
+	// EndnotesRelationshipType is the OOXML relationship type for endnotes parts.
+	EndnotesRelationshipType = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/endnotes"
 )
 
 // Relationship is one OPC relationship entry.

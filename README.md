@@ -27,17 +27,19 @@ Implemented:
 - Flat and nested tables.
 - Table `gridSpan` expansion into dense grids.
 - Table `vMerge` continuation inheritance so each row is self-contained.
+- Headers and footers parsed from related WordprocessingML parts.
+- Footnotes and endnotes parsed by note ID, with in-body references.
+- `mc:AlternateContent` choice/fallback handling for blocks, runs, and drawings.
+- Field display-value state handling for complex fields and `w:fldSimple`.
 - Embedded image references and lazy image byte loading.
+- Part-aware image IDs for related parts, while body image `rId` lookup remains supported.
 - Plain-text output through `Document.ToText()`.
+- Full Markdown output through `Document.ToMarkdown()` for RAG ingestion.
+- RAG chunks with source, path, Markdown, list, table, image, and note metadata.
 - Synthetic DOCX unit tests built in memory.
 
 Not implemented yet:
 
-- Headers, footers, footnotes, and endnotes.
-- Full Markdown output for RAG ingestion.
-- Production-shaped chunk metadata beyond the current preliminary API.
-- `mc:AlternateContent` choice/fallback handling.
-- Field code display-value state handling.
 - DOCX writing.
 - Legacy binary `.doc` support.
 
@@ -90,6 +92,18 @@ fmt.Println(image.ContentType, image.Filename, len(image.Bytes))
 - Vertically merged table continuations render the inherited origin text.
 - Horizontally merged cells render their text once and leave covered columns empty.
 - Images render as `[image: <filename>]`.
+- Footnote and endnote references render as `[footnote: <id>]` and `[endnote: <id>]`.
+
+## Markdown and Chunks
+
+`Document.ToMarkdown()` emits Markdown for headers, body, footers, footnotes,
+and endnotes. Links, basic run formatting, images, tables, and note definitions
+are represented in Markdown-friendly form for ingestion pipelines.
+
+`Document.Chunks()` returns ordered RAG units with stable source/path metadata:
+`Source`, `SourceID`, `Path`, `Markdown`, `List`, `Table`, `Image`, and `Notes`.
+The earlier `Kind`, `Level`, `Text`, `TableID`, and `ImageID` fields remain
+available for callers using the preliminary API.
 
 ## Testing Strategy
 

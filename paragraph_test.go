@@ -88,6 +88,55 @@ func TestParagraph_List_WithEmptyIlvl(t *testing.T) {
 	})
 }
 
+func TestParagraph_AlternateContentChoice(t *testing.T) {
+	t.Parallel()
+
+	doc := openDoc(t, `
+<mc:AlternateContent>
+  <mc:Choice Requires="w14"><w:p><w:r><w:t>choice paragraph</w:t></w:r></w:p></mc:Choice>
+  <mc:Fallback><w:p><w:r><w:t>fallback paragraph</w:t></w:r></w:p></mc:Fallback>
+</mc:AlternateContent>
+<mc:AlternateContent>
+  <mc:Fallback><w:p><w:r><w:t>fallback only</w:t></w:r></w:p></mc:Fallback>
+</mc:AlternateContent>
+<w:p>
+  <w:r>
+    <mc:AlternateContent>
+      <mc:Choice Requires="w14"><w:t>choice run</w:t></mc:Choice>
+      <mc:Fallback><w:t>fallback run</w:t></mc:Fallback>
+    </mc:AlternateContent>
+  </w:r>
+</w:p>`)
+
+	if got, want := doc.ToText(), "choice paragraph\nfallback only\nchoice run\n"; got != want {
+		t.Fatalf("ToText() = %q, want %q", got, want)
+	}
+}
+
+func TestParagraph_FieldDisplayValueState(t *testing.T) {
+	t.Parallel()
+
+	doc := openDoc(t, `
+<w:p>
+  <w:r><w:t xml:space="preserve">Before </w:t></w:r>
+  <w:r><w:fldChar w:fldCharType="begin"/></w:r>
+  <w:r><w:instrText xml:space="preserve"> HYPERLINK "https://example.com" </w:instrText></w:r>
+  <w:r><w:t>hidden</w:t></w:r>
+  <w:r><w:fldChar w:fldCharType="separate"/></w:r>
+  <w:r><w:t>Example</w:t></w:r>
+  <w:r><w:fldChar w:fldCharType="end"/></w:r>
+  <w:r><w:t xml:space="preserve"> </w:t></w:r>
+  <w:fldSimple w:instr='HYPERLINK "https://simple.example"'><w:r><w:t>Simple</w:t></w:r></w:fldSimple>
+</w:p>`)
+
+	if got, want := doc.ToText(), "Before Example Simple\n"; got != want {
+		t.Fatalf("ToText() = %q, want %q", got, want)
+	}
+	if got, want := doc.ToMarkdown(), "Before [Example](https://example.com) [Simple](https://simple.example)\n"; got != want {
+		t.Fatalf("ToMarkdown() = %q, want %q", got, want)
+	}
+}
+
 func openNumberedDoc(t *testing.T, bodyXML, numberingXML string) *Document {
 	t.Helper()
 

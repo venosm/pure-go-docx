@@ -144,6 +144,12 @@ func (p *parser) parseRawTableCell() (rawCell, error) {
 					return rawCell{}, err
 				}
 				cell.blocks = append(cell.blocks, blocks...)
+			case "AlternateContent":
+				blocks, err := p.parseAlternateContentBlocks()
+				if err != nil {
+					return rawCell{}, err
+				}
+				cell.blocks = append(cell.blocks, blocks...)
 			default:
 				if err := p.skipElement(t); err != nil {
 					return rawCell{}, err
@@ -273,7 +279,7 @@ func inheritVerticalMerges(table *denseTable) {
 			}
 			origin, ok := table.findVerticalMergeOrigin(rowIndex, colIndex)
 			if !ok {
-				// TODO: orphan vMerge logging.
+				// Keep orphan continuations empty; there is no origin to inherit.
 				continue
 			}
 			table.grid[rowIndex][colIndex].Blocks = origin.Blocks

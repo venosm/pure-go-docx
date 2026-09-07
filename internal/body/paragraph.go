@@ -10,8 +10,16 @@ type runStyle struct {
 	bold, italic, underline bool
 }
 
+type fieldState struct {
+	depth       int
+	showResult  bool
+	instruction strings.Builder
+	displayLink string
+}
+
 func (p *parser) parseParagraph() (*Paragraph, error) {
 	paragraph := &Paragraph{}
+	field := &fieldState{}
 	for {
 		tok, err := p.next()
 		if err != nil {
@@ -26,13 +34,25 @@ func (p *parser) parseParagraph() (*Paragraph, error) {
 					return nil, err
 				}
 			case "r":
-				runs, err := p.parseRun("")
+				runs, err := p.parseRun("", field)
 				if err != nil {
 					return nil, err
 				}
 				paragraph.Runs = append(paragraph.Runs, runs...)
 			case "hyperlink":
-				runs, err := p.parseHyperlink(t)
+				runs, err := p.parseHyperlink(t, field)
+				if err != nil {
+					return nil, err
+				}
+				paragraph.Runs = append(paragraph.Runs, runs...)
+			case "fldSimple":
+				runs, err := p.parseSimpleField("", t, field)
+				if err != nil {
+					return nil, err
+				}
+				paragraph.Runs = append(paragraph.Runs, runs...)
+			case "AlternateContent":
+				runs, err := p.parseAlternateContentRuns("", field)
 				if err != nil {
 					return nil, err
 				}
@@ -127,7 +147,7 @@ func (p *parser) parseNumPr() (int, int, error) {
 	}
 }
 
-func (p *parser) parseHyperlink(start xml.StartElement) ([]Run, error) {
+func (p *parser) parseHyperlink(start xml.StartElement, field *fieldState) ([]Run, error) {
 	link := ""
 	if relID := attr(start, "id"); relID != "" {
 		if rel, ok := p.relationships[relID]; ok {
@@ -147,16 +167,29 @@ func (p *parser) parseHyperlink(start xml.StartElement) ([]Run, error) {
 
 		switch t := tok.(type) {
 		case xml.StartElement:
-			if t.Name.Local == "r" {
-				parsed, err := p.parseRun(link)
+			switch t.Name.Local {
+			case "r":
+				parsed, err := p.parseRun(link, field)
 				if err != nil {
 					return nil, err
 				}
 				runs = append(runs, parsed...)
-				continue
-			}
-			if err := p.skipElement(t); err != nil {
-				return nil, err
+			case "fldSimple":
+				parsed, err := p.parseSimpleField(link, t, field)
+				if err != nil {
+					return nil, err
+				}
+				runs = append(runs, parsed...)
+			case "AlternateContent":
+				parsed, err := p.parseAlternateContentRuns(link, field)
+				if err != nil {
+					return nil, err
+				}
+				runs = append(runs, parsed...)
+			default:
+				if err := p.skipElement(t); err != nil {
+					return nil, err
+				}
 			}
 		case xml.EndElement:
 			if t.Name.Local == "hyperlink" {
@@ -166,7 +199,7 @@ func (p *parser) parseHyperlink(start xml.StartElement) ([]Run, error) {
 	}
 }
 
-func (p *parser) parseRun(link string) ([]Run, error) {
+func (p *parser) parseRun(link string, field *fieldState) ([]Run, error) {
 	var runs []Run
 	style := runStyle{}
 
@@ -188,29 +221,78 @@ func (p *parser) parseRun(link string) ([]Run, error) {
 				if err != nil {
 					return nil, err
 				}
-				runs = append(runs, style.run(link, text))
+				if field.shouldRender() {
+					runs = append(runs, style.run(field.link(link), text))
+				}
 			case "tab":
-				run := style.run(link, "")
-				run.Tab = true
-				runs = append(runs, run)
+				if field.shouldRender() {
+					run := style.run(field.link(link), "")
+					run.Tab = true
+					runs = append(runs, run)
+				}
+				if err := p.skipElement(t); err != nil {
+					return nil, err
+				}
 			case "br":
-				run := style.run(link, "")
-				run.Break = true
-				runs = append(runs, run)
+				if field.shouldRender() {
+					run := style.run(field.link(link), "")
+					run.Break = true
+					runs = append(runs, run)
+				}
+				if err := p.skipElement(t); err != nil {
+					return nil, err
+				}
 			case "drawing":
 				image, err := p.parseDrawing()
 				if err != nil {
 					return nil, err
 				}
-				if image != nil {
-					run := style.run(link, "")
+				if image != nil && field.shouldRender() {
+					run := style.run(field.link(link), "")
 					run.Image = image
 					runs = append(runs, run)
 				}
-			case "instrText":
+			case "footnoteReference":
+				if field.shouldRender() {
+					run := style.run(field.link(link), "")
+					run.Note = &NoteRef{Kind: NoteKindFootnote, ID: attr(t, "id")}
+					runs = append(runs, run)
+				}
 				if err := p.skipElement(t); err != nil {
 					return nil, err
 				}
+			case "endnoteReference":
+				if field.shouldRender() {
+					run := style.run(field.link(link), "")
+					run.Note = &NoteRef{Kind: NoteKindEndnote, ID: attr(t, "id")}
+					runs = append(runs, run)
+				}
+				if err := p.skipElement(t); err != nil {
+					return nil, err
+				}
+			case "fldChar":
+				field.applyChar(attr(t, "fldCharType"))
+				if err := p.skipElement(t); err != nil {
+					return nil, err
+				}
+			case "instrText":
+				text, err := p.readText("instrText")
+				if err != nil {
+					return nil, err
+				}
+				field.addInstruction(text)
+			case "fldSimple":
+				parsed, err := p.parseSimpleField(field.link(link), t, field)
+				if err != nil {
+					return nil, err
+				}
+				runs = append(runs, parsed...)
+			case "AlternateContent":
+				parsed, err := p.parseAlternateContentRunChildren(field.link(link), &style, field)
+				if err != nil {
+					return nil, err
+				}
+				runs = append(runs, parsed...)
 			default:
 				if err := p.skipElement(t); err != nil {
 					return nil, err
@@ -222,6 +304,351 @@ func (p *parser) parseRun(link string) ([]Run, error) {
 			}
 		}
 	}
+}
+
+func (p *parser) parseRunsUntil(endLocal, link string, field *fieldState) ([]Run, error) {
+	var runs []Run
+	for {
+		tok, err := p.next()
+		if err != nil {
+			return nil, err
+		}
+
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "r":
+				parsed, err := p.parseRun(link, field)
+				if err != nil {
+					return nil, err
+				}
+				runs = append(runs, parsed...)
+			case "hyperlink":
+				parsed, err := p.parseHyperlink(t, field)
+				if err != nil {
+					return nil, err
+				}
+				runs = append(runs, parsed...)
+			case "fldSimple":
+				parsed, err := p.parseSimpleField(link, t, field)
+				if err != nil {
+					return nil, err
+				}
+				runs = append(runs, parsed...)
+			case "AlternateContent":
+				parsed, err := p.parseAlternateContentRuns(link, field)
+				if err != nil {
+					return nil, err
+				}
+				runs = append(runs, parsed...)
+			default:
+				if err := p.skipElement(t); err != nil {
+					return nil, err
+				}
+			}
+		case xml.EndElement:
+			if t.Name.Local == endLocal {
+				return runs, nil
+			}
+		}
+	}
+}
+
+func (p *parser) parseSimpleField(link string, start xml.StartElement, parentField *fieldState) ([]Run, error) {
+	if !parentField.shouldRender() {
+		return nil, p.skipElement(start)
+	}
+	fieldLink := link
+	if parsedLink := fieldInstructionLink(attr(start, "instr")); parsedLink != "" {
+		fieldLink = parsedLink
+	}
+	return p.parseRunsUntil("fldSimple", fieldLink, &fieldState{})
+}
+
+func (p *parser) parseAlternateContentRuns(link string, field *fieldState) ([]Run, error) {
+	var runs []Run
+	chosen := false
+	for {
+		tok, err := p.next()
+		if err != nil {
+			return nil, err
+		}
+
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "Choice":
+				if chosen {
+					if err := p.skipElement(t); err != nil {
+						return nil, err
+					}
+					continue
+				}
+				choiceRuns, err := p.parseRunsUntil("Choice", link, field)
+				if err != nil {
+					return nil, err
+				}
+				runs = choiceRuns
+				chosen = true
+			case "Fallback":
+				if chosen {
+					if err := p.skipElement(t); err != nil {
+						return nil, err
+					}
+					continue
+				}
+				fallbackRuns, err := p.parseRunsUntil("Fallback", link, field)
+				if err != nil {
+					return nil, err
+				}
+				runs = fallbackRuns
+				chosen = true
+			default:
+				if err := p.skipElement(t); err != nil {
+					return nil, err
+				}
+			}
+		case xml.EndElement:
+			if t.Name.Local == "AlternateContent" {
+				return runs, nil
+			}
+		}
+	}
+}
+
+func (p *parser) parseAlternateContentRunChildren(link string, style *runStyle, field *fieldState) ([]Run, error) {
+	var runs []Run
+	chosen := false
+	for {
+		tok, err := p.next()
+		if err != nil {
+			return nil, err
+		}
+
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "Choice":
+				if chosen {
+					if err := p.skipElement(t); err != nil {
+						return nil, err
+					}
+					continue
+				}
+				choiceRuns, err := p.parseRunChildrenUntil("Choice", link, style, field)
+				if err != nil {
+					return nil, err
+				}
+				runs = choiceRuns
+				chosen = true
+			case "Fallback":
+				if chosen {
+					if err := p.skipElement(t); err != nil {
+						return nil, err
+					}
+					continue
+				}
+				fallbackRuns, err := p.parseRunChildrenUntil("Fallback", link, style, field)
+				if err != nil {
+					return nil, err
+				}
+				runs = fallbackRuns
+				chosen = true
+			default:
+				if err := p.skipElement(t); err != nil {
+					return nil, err
+				}
+			}
+		case xml.EndElement:
+			if t.Name.Local == "AlternateContent" {
+				return runs, nil
+			}
+		}
+	}
+}
+
+func (p *parser) parseRunChildrenUntil(endLocal, link string, style *runStyle, field *fieldState) ([]Run, error) {
+	var runs []Run
+	for {
+		tok, err := p.next()
+		if err != nil {
+			return nil, err
+		}
+
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "r":
+				parsed, err := p.parseRun(field.link(link), field)
+				if err != nil {
+					return nil, err
+				}
+				runs = append(runs, parsed...)
+			case "rPr":
+				if err := p.parseRunProperties(style); err != nil {
+					return nil, err
+				}
+			case "t":
+				text, err := p.readText("t")
+				if err != nil {
+					return nil, err
+				}
+				if field.shouldRender() {
+					runs = append(runs, style.run(field.link(link), text))
+				}
+			case "tab":
+				if field.shouldRender() {
+					run := style.run(field.link(link), "")
+					run.Tab = true
+					runs = append(runs, run)
+				}
+				if err := p.skipElement(t); err != nil {
+					return nil, err
+				}
+			case "br":
+				if field.shouldRender() {
+					run := style.run(field.link(link), "")
+					run.Break = true
+					runs = append(runs, run)
+				}
+				if err := p.skipElement(t); err != nil {
+					return nil, err
+				}
+			case "drawing":
+				image, err := p.parseDrawing()
+				if err != nil {
+					return nil, err
+				}
+				if image != nil && field.shouldRender() {
+					run := style.run(field.link(link), "")
+					run.Image = image
+					runs = append(runs, run)
+				}
+			case "footnoteReference":
+				if field.shouldRender() {
+					run := style.run(field.link(link), "")
+					run.Note = &NoteRef{Kind: NoteKindFootnote, ID: attr(t, "id")}
+					runs = append(runs, run)
+				}
+				if err := p.skipElement(t); err != nil {
+					return nil, err
+				}
+			case "endnoteReference":
+				if field.shouldRender() {
+					run := style.run(field.link(link), "")
+					run.Note = &NoteRef{Kind: NoteKindEndnote, ID: attr(t, "id")}
+					runs = append(runs, run)
+				}
+				if err := p.skipElement(t); err != nil {
+					return nil, err
+				}
+			case "fldChar":
+				field.applyChar(attr(t, "fldCharType"))
+				if err := p.skipElement(t); err != nil {
+					return nil, err
+				}
+			case "instrText":
+				text, err := p.readText("instrText")
+				if err != nil {
+					return nil, err
+				}
+				field.addInstruction(text)
+			case "fldSimple":
+				parsed, err := p.parseSimpleField(field.link(link), t, field)
+				if err != nil {
+					return nil, err
+				}
+				runs = append(runs, parsed...)
+			case "AlternateContent":
+				parsed, err := p.parseAlternateContentRunChildren(field.link(link), style, field)
+				if err != nil {
+					return nil, err
+				}
+				runs = append(runs, parsed...)
+			default:
+				if err := p.skipElement(t); err != nil {
+					return nil, err
+				}
+			}
+		case xml.EndElement:
+			if t.Name.Local == endLocal {
+				return runs, nil
+			}
+		}
+	}
+}
+
+func (f *fieldState) shouldRender() bool {
+	return f == nil || f.depth == 0 || f.showResult
+}
+
+func (f *fieldState) link(fallback string) string {
+	if f == nil || f.displayLink == "" || !f.showResult {
+		return fallback
+	}
+	return f.displayLink
+}
+
+func (f *fieldState) applyChar(charType string) {
+	if f == nil {
+		return
+	}
+	switch charType {
+	case "begin":
+		if f.depth == 0 {
+			f.reset()
+		}
+		f.depth++
+		f.showResult = false
+	case "separate":
+		if f.depth == 0 {
+			return
+		}
+		f.showResult = true
+		f.displayLink = fieldInstructionLink(f.instruction.String())
+	case "end":
+		if f.depth == 0 {
+			return
+		}
+		f.depth--
+		if f.depth == 0 {
+			f.reset()
+		}
+	}
+}
+
+func (f *fieldState) addInstruction(text string) {
+	if f == nil || f.depth == 0 || f.showResult {
+		return
+	}
+	f.instruction.WriteString(text)
+}
+
+func (f *fieldState) reset() {
+	f.showResult = false
+	f.instruction.Reset()
+	f.displayLink = ""
+}
+
+func fieldInstructionLink(instruction string) string {
+	instruction = strings.TrimSpace(instruction)
+	if instruction == "" {
+		return ""
+	}
+	fields := strings.Fields(instruction)
+	if len(fields) == 0 || strings.ToUpper(fields[0]) != "HYPERLINK" {
+		return ""
+	}
+	if start := strings.Index(instruction, `"`); start >= 0 {
+		rest := instruction[start+1:]
+		if end := strings.Index(rest, `"`); end >= 0 {
+			return rest[:end]
+		}
+	}
+	if len(fields) < 2 || strings.HasPrefix(fields[1], `\`) {
+		return ""
+	}
+	return fields[1]
 }
 
 func (p *parser) parseRunProperties(style *runStyle) error {

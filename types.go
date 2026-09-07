@@ -14,6 +14,16 @@ type ListRef = body.ListRef
 // Run is a paragraph run containing text, formatting, links, or an image.
 type Run = body.Run
 
+// NoteRef is a footnote or endnote reference found in a run.
+type NoteRef = body.NoteRef
+
+const (
+	// NoteKindFootnote identifies a footnote reference or chunk source.
+	NoteKindFootnote = body.NoteKindFootnote
+	// NoteKindEndnote identifies an endnote reference or chunk source.
+	NoteKindEndnote = body.NoteKindEndnote
+)
+
 // Table is a rectangular table grid.
 type Table = body.Table
 
@@ -40,3 +50,12 @@ type ImageRef = body.ImageRef
 
 // Chunk is an ordered RAG ingestion unit derived from document blocks.
 type Chunk = body.Chunk
+
+// ChunkList describes list metadata for a paragraph chunk.
+type ChunkList = body.ChunkList
+
+// ChunkTable describes table position metadata for a chunk.
+type ChunkTable = body.ChunkTable
+
+// ChunkImage describes image metadata for a chunk.
+type ChunkImage = body.ChunkImage
