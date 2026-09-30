@@ -1,0 +1,5 @@
+# Konfigurace IDE JetBrains
+.idea/
+
+# Logy z mcp-go-debugger
+mcp-go-debugger.log
