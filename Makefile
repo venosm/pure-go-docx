@@ -1,4 +1,7 @@
-.PHONY: tidy fmt test lint build vet
+.PHONY: tidy fmt test bench lint build vet
+
+BENCH ?= .
+BENCH_COUNT ?= 1
 
 tidy:
 	go mod tidy
@@ -8,6 +11,9 @@ fmt:
 
 test:
 	go test ./...
+
+bench:
+	go test -run '^$$' -bench '$(BENCH)' -benchmem -count $(BENCH_COUNT) ./...
 
 lint:
 	go vet ./...

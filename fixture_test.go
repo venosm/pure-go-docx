@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestRealDocxFixtures(t *testing.T) {
+func TestDocxFixtures(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -14,30 +14,32 @@ func TestRealDocxFixtures(t *testing.T) {
 		minBodyBlocks int
 		minTextLen    int
 		minChunks     int
+		minImages     int
 		headers       int
 		footers       int
 		footnotes     int
 		endnotes      int
 	}{
 		{
-			name:          "formular nabidky",
-			filename:      "Priloha c. 1 - Formular nabidky - PROHLASENI DODAVATELE - vzor.docx",
-			minBodyBlocks: 20,
-			minTextLen:    1000,
-			minChunks:     20,
-			headers:       1,
-			footers:       1,
-			footnotes:     3,
-			endnotes:      0,
-		},
-		{
-			name:          "smlouva",
-			filename:      "Priloha c. 2 – Smlouva – vzor.docx",
+			name:          "service agreement",
+			filename:      "service-agreement-en.docx",
 			minBodyBlocks: 20,
 			minTextLen:    1000,
 			minChunks:     20,
 			headers:       2,
 			footers:       1,
+			footnotes:     3,
+			endnotes:      0,
+		},
+		{
+			name:          "real service contract",
+			filename:      "service-contract-sample.docx",
+			minBodyBlocks: 100,
+			minTextLen:    40000,
+			minChunks:     200,
+			minImages:     1,
+			headers:       2,
+			footers:       2,
 			footnotes:     0,
 			endnotes:      0,
 		},
@@ -78,6 +80,15 @@ func TestRealDocxFixtures(t *testing.T) {
 			}
 			if len(chunks) < tc.minChunks {
 				t.Fatalf("len(Chunks()) = %d, want at least %d", len(chunks), tc.minChunks)
+			}
+			if tc.minImages > 0 {
+				images, err := doc.AllImages()
+				if err != nil {
+					t.Fatalf("AllImages() error = %v", err)
+				}
+				if len(images) < tc.minImages {
+					t.Fatalf("len(AllImages()) = %d, want at least %d", len(images), tc.minImages)
+				}
 			}
 			if len(doc.Headers) != tc.headers {
 				t.Fatalf("len(Headers) = %d, want %d", len(doc.Headers), tc.headers)

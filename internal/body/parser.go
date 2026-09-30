@@ -24,6 +24,14 @@ type parser struct {
 	relationships map[string]opc.Relationship
 	numbering     *numbering.Resolver
 	sourcePart    string
+
+	// otevrene je zásobník otevřených elementů s nepřeloženými prefixy.
+	// Parser čte přes Decoder.RawToken a párování elementů kontroluje sám.
+	otevrene []xml.StartElement
+	// cekajiciKonec drží koncový tag, který se po automatickém uzavření
+	// vnitřního elementu zpracuje znovu (nestriktní režim encoding/xml).
+	cekajiciKonec   xml.EndElement
+	maCekajiciKonec bool
 }
 
 // Parse reads the main WordprocessingML document body into blocks.
@@ -114,8 +122,8 @@ func (p *parser) seekRoot(rootLocal string) error {
 		if !ok || se.Name.Local != rootLocal {
 			continue
 		}
-		if se.Name.Space != "" && se.Name.Space != wordprocessingNamespace {
-			return fmt.Errorf("unexpected %s namespace %q", rootLocal, se.Name.Space)
+		if space := p.jmennyProstor(se); space != "" && space != wordprocessingNamespace {
+			return fmt.Errorf("unexpected %s namespace %q", rootLocal, space)
 		}
 		return nil
 	}
@@ -341,23 +349,101 @@ func (p *parser) next() (xml.Token, error) {
 	default:
 	}
 
-	tok, err := p.dec.Token()
+	tok, err := p.dalsiSurovyToken()
 	if err != nil {
 		return nil, err
 	}
 
-	switch tok.(type) {
+	switch t := tok.(type) {
 	case xml.StartElement:
 		p.depth++
 		if p.depth > maxXMLDepth {
 			return nil, fmt.Errorf("XML depth exceeds limit: %d > %d", p.depth, maxXMLDepth)
 		}
+		p.otevrene = append(p.otevrene, t)
 	case xml.EndElement:
+		if tok, err = p.uzavriElement(t); err != nil {
+			return nil, err
+		}
 		if p.depth > 0 {
 			p.depth--
 		}
 	}
 	return tok, nil
+}
+
+// dalsiSurovyToken čte přes Decoder.RawToken, který na rozdíl od Token
+// nepřekládá prefixy jmenných prostorů. Parser porovnává jen lokální jména,
+// takže překlad by byl zbytečná práce. Konec vstupu uvnitř elementu hlásí
+// stejnou chybou jako Token.
+func (p *parser) dalsiSurovyToken() (xml.Token, error) {
+	if p.maCekajiciKonec {
+		p.maCekajiciKonec = false
+		return p.cekajiciKonec, nil
+	}
+	tok, err := p.dec.RawToken()
+	if tok == nil && err != nil {
+		if errors.Is(err, io.EOF) && len(p.otevrene) > 0 {
+			return nil, p.syntaktickaChyba("unexpected EOF")
+		}
+		return nil, err
+	}
+	return tok, nil
+}
+
+// uzavriElement páruje koncový tag s otevřeným elementem stejně jako
+// Decoder.Token v nestriktním režimu: jiné lokální jméno uzavře vnitřní
+// element a koncový tag se zpracuje znovu, jiný prefix je chyba.
+func (p *parser) uzavriElement(konec xml.EndElement) (xml.Token, error) {
+	n := len(p.otevrene)
+	if n == 0 {
+		return nil, p.syntaktickaChyba("unexpected end element </" + konec.Name.Local + ">")
+	}
+	zacatek := p.otevrene[n-1].Name
+	p.otevrene = p.otevrene[:n-1]
+
+	switch {
+	case zacatek.Local != konec.Name.Local:
+		p.cekajiciKonec = konec
+		p.maCekajiciKonec = true
+		return xml.EndElement{Name: zacatek}, nil
+	case zacatek.Space != konec.Name.Space:
+		space := konec.Name.Space
+		if space == "" {
+			space = `""`
+		}
+		return nil, p.syntaktickaChyba("element <" + zacatek.Local + "> in space " + zacatek.Space +
+			" closed by </" + konec.Name.Local + "> in space " + space)
+	}
+	return konec, nil
+}
+
+// jmennyProstor přeloží prefix elementu na URI podle deklarací xmlns
+// na něm a na jeho otevřených předcích, stejně jako Decoder.Token.
+// Element už musí být na zásobníku otevrene.
+func (p *parser) jmennyProstor(se xml.StartElement) string {
+	prefix := se.Name.Space
+	if prefix == "xml" {
+		return "http://www.w3.org/XML/1998/namespace"
+	}
+	for i := len(p.otevrene) - 1; i >= 0; i-- {
+		space, nalezeno := "", false
+		for _, a := range p.otevrene[i].Attr {
+			if (prefix == "" && a.Name.Space == "" && a.Name.Local == "xmlns") ||
+				(prefix != "" && a.Name.Space == "xmlns" && a.Name.Local == prefix) {
+				space, nalezeno = a.Value, true
+			}
+		}
+		if nalezeno {
+			return space
+		}
+	}
+	return prefix
+}
+
+func (p *parser) syntaktickaChyba(zprava string) error {
+	radek, _ := p.dec.InputPos()
+	return &xml.SyntaxError{Msg: zprava, Line: radek}
 }
 
 func attr(se xml.StartElement, local string) string {

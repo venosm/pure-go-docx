@@ -2,6 +2,9 @@ package godocx
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/venosm/pure-go-docx/internal/testutil"
@@ -65,6 +68,121 @@ func TestFormatOrdinal(t *testing.T) {
 	}
 }
 
+func TestEscapeMarkdownText(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		text string
+		want string
+	}{
+		{name: "prazdny", text: "", want: ""},
+		{name: "bez specialnich znaku", text: "Plain text, 42 % (net).", want: "Plain text, 42 % (net)."},
+		{name: "unicode bez specialnich znaku", text: "Příliš žluťoučký kůň", want: "Příliš žluťoučký kůň"},
+		{name: "zpetne lomitko", text: `C:\temp`, want: `C:\\temp`},
+		{name: "hvezdicka", text: "a*b", want: `a\*b`},
+		{name: "podtrzitko", text: "snake_case", want: `snake\_case`},
+		{name: "hranate zavorky", text: "[1]", want: `\[1\]`},
+		{name: "zpetny apostrof", text: "`code`", want: "\\`code\\`"},
+		{name: "vsechny znaky", text: "\\*_[]`", want: "\\\\\\*\\_\\[\\]\\`"},
+		{name: "jen specialni znak na konci", text: "Section 1_", want: `Section 1\_`},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := escapeMarkdownText(tc.text); got != tc.want {
+				t.Fatalf("escapeMarkdownText(%q) = %q, want %q", tc.text, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRunMarkdown(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		run  Run
+		want string
+	}{
+		{name: "prosty text", run: Run{Text: "a"}, want: "a"},
+		{name: "tucne", run: Run{Text: "a", Bold: true}, want: "**a**"},
+		{name: "kurziva", run: Run{Text: "a", Italic: true}, want: "*a*"},
+		{name: "podtrzeni", run: Run{Text: "a", Underline: true}, want: "<u>a</u>"},
+		{name: "odkaz", run: Run{Text: "a", Link: "https://example.com/a b"}, want: "[a](https://example.com/a%20b)"},
+		{
+			name: "vsechno formatovani",
+			run:  Run{Text: "a", Bold: true, Italic: true, Underline: true, Link: "u"},
+			want: "***<u>[a](u)</u>***",
+		},
+		{name: "tucne s escapovanim", run: Run{Text: "a_b", Bold: true}, want: `**a\_b**`},
+		{name: "prazdny text s formatovanim", run: Run{Text: "", Bold: true, Link: "u"}, want: ""},
+		{name: "tabulator", run: Run{Tab: true}, want: "\t"},
+		{name: "zalomeni", run: Run{Break: true}, want: "\n"},
+		{
+			name: "obrazek",
+			run:  Run{Image: &ImageRef{AltText: "logo_1", Filename: "media/a b.png"}},
+			want: `![logo\_1](media/a%20b.png)`,
+		},
+		{name: "obrazek bez souboru", run: Run{Image: &ImageRef{ID: "word/document.xml#rId1"}}, want: "![](word/document.xml#rId1)"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := runMarkdown(tc.run); got != tc.want {
+				t.Fatalf("runMarkdown(%+v) = %q, want %q", tc.run, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestOdhadPoctuChunkuJeHorniMez hlídá, že Chunks předalokuje dost místa.
+// Nový druh chunku bez úpravy odhadu by vedl k tiché realokaci slice.
+func TestOdhadPoctuChunkuJeHorniMez(t *testing.T) {
+	t.Parallel()
+
+	soubory, err := filepath.Glob(filepath.Join("testdata", "*.docx"))
+	if err != nil {
+		t.Fatalf("Glob() error = %v", err)
+	}
+	for _, soubor := range soubory {
+		if strings.HasPrefix(filepath.Base(soubor), "malformed-") {
+			continue
+		}
+		t.Run(filepath.Base(soubor), func(t *testing.T) {
+			t.Parallel()
+
+			data, err := os.ReadFile(soubor)
+			if err != nil {
+				t.Fatalf("ReadFile() error = %v", err)
+			}
+			doc, err := OpenReader(bytes.NewReader(data), int64(len(data)))
+			if err != nil {
+				t.Fatalf("OpenReader() error = %v", err)
+			}
+			odhad := doc.odhadPoctuChunku()
+			if chunks := doc.Chunks(); len(chunks) > odhad {
+				t.Fatalf("len(Chunks()) = %d, odhadPoctuChunku() = %d, want odhad >= len", len(chunks), odhad)
+			}
+		})
+	}
+}
+
+// TestEscapeMarkdownTextBezAlokaci hlídá, že text bez znaků Markdownu
+// neprochází nahrazovačem. Test nevolá t.Parallel, protože AllocsPerRun
+// čte globální statistiky paměti a souběžné testy by výsledek zkreslily.
+func TestEscapeMarkdownTextBezAlokaci(t *testing.T) {
+	text := "The supplier shall deliver the services in the scope defined by this agreement."
+
+	if got := testing.AllocsPerRun(100, func() {
+		_ = escapeMarkdownText(text)
+	}); got != 0 {
+		t.Fatalf("escapeMarkdownText() allocs = %v, want 0", got)
+	}
+}
+
 func TestToText_BulletList(t *testing.T) {
 	t.Parallel()
 
@@ -114,14 +232,14 @@ func TestToText_Table_WithVerticalMerge(t *testing.T) {
 <w:tbl>
   <w:tblGrid><w:gridCol/><w:gridCol/></w:tblGrid>
   <w:tr>
-    <w:tc><w:tcPr><w:vMerge w:val="restart"/></w:tcPr><w:p><w:r><w:t>Smlouva</w:t></w:r></w:p></w:tc>
+    <w:tc><w:tcPr><w:vMerge w:val="restart"/></w:tcPr><w:p><w:r><w:t>Contract</w:t></w:r></w:p></w:tc>
     `+tc("42")+`
   </w:tr>
   <w:tr><w:tc><w:tcPr><w:vMerge/></w:tcPr></w:tc>`+tc("43")+`</w:tr>
   <w:tr><w:tc><w:tcPr><w:vMerge/></w:tcPr></w:tc>`+tc("44")+`</w:tr>
 </w:tbl>`)
 
-	if got, want := doc.ToText(), "Smlouva\t42\nSmlouva\t43\nSmlouva\t44\n"; got != want {
+	if got, want := doc.ToText(), "Contract\t42\nContract\t43\nContract\t44\n"; got != want {
 		t.Fatalf("ToText() = %q, want %q", got, want)
 	}
 }

@@ -21,7 +21,9 @@ Implemented:
 
 - OPC zip loading with content-type based main document discovery.
 - Relationship parsing for document media and numbering definitions.
-- Streaming XML parsing with `encoding/xml.Decoder.Token`.
+- Streaming XML parsing with `encoding/xml`. Body, header, footer, and note
+  parts are read with `Decoder.RawToken` and the parser checks element nesting
+  itself, matching `Decoder.Token` in non-strict mode.
 - Paragraphs, runs, tabs, line breaks, headings, and basic run formatting flags.
 - Numbered and bulleted list resolution with nesting and ordinals.
 - Flat and nested tables.
@@ -65,12 +67,18 @@ func main() {
 }
 ```
 
+`Open` reads the whole file into memory (up to 500 MiB), so the returned
+`Document` can still load images lazily after the file is closed.
+
 Open from any random-access reader:
 
 ```go
 reader := bytes.NewReader(data)
 doc, err := godocx.OpenReader(reader, int64(len(data)))
 ```
+
+The reader must stay valid for the lifetime of the `Document`, because image
+bytes are read on demand.
 
 Load an embedded image lazily:
 
@@ -111,8 +119,8 @@ Tests synthesize minimal DOCX archives in memory with hand-written XML. This
 keeps the unit tests focused on OOXML edge cases without depending on large
 binary fixtures.
 
-Real-world fixtures can be added under `testdata/`; see
-`testdata/README.md` for the planned coverage list.
+The real-world service contract fixture is under `testdata/`; see
+`testdata/README.md` for its coverage and the generated fixture list.
 
 ## Verification
 
@@ -129,3 +137,18 @@ go test ./... -race
 
 `make tidy` must be used instead of running `go mod tidy` directly in normal
 workflow.
+
+## Benchmarks
+
+`benchmark_test.go` measures parsing (`Open`, `OpenReader`), rendering
+(`ToText`, `ToMarkdown`, `Chunks`), and lazy image loading on the `testdata`
+fixtures, plus scaling on synthetic documents with 100, 1,000, and 10,000
+blocks.
+
+```bash
+make bench
+make bench BENCH=Chunks BENCH_COUNT=10
+```
+
+Use `BENCH_COUNT=10` with `benchstat` to compare results before and after a
+change.

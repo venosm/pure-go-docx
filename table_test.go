@@ -67,7 +67,7 @@ func TestTable_VerticalMerge_Inheritance(t *testing.T) {
 <w:tbl>
   <w:tblGrid><w:gridCol/><w:gridCol/></w:tblGrid>
   <w:tr>
-    <w:tc><w:tcPr><w:vMerge w:val="restart"/></w:tcPr><w:p><w:r><w:t>Smlouva</w:t></w:r></w:p></w:tc>
+    <w:tc><w:tcPr><w:vMerge w:val="restart"/></w:tcPr><w:p><w:r><w:t>Contract</w:t></w:r></w:p></w:tc>
     `+tc("42")+`
   </w:tr>
   <w:tr>
@@ -84,7 +84,7 @@ func TestTable_VerticalMerge_Inheritance(t *testing.T) {
 		if got, want := table.Grid[row][0].VMerge, MergeContinue; got != want {
 			t.Fatalf("row %d VMerge = %d, want %d", row, got, want)
 		}
-		if got, want := cellText(table.Grid[row][0]), "Smlouva"; got != want {
+		if got, want := cellText(table.Grid[row][0]), "Contract"; got != want {
 			t.Fatalf("row %d inherited text = %q, want %q", row, got, want)
 		}
 	}

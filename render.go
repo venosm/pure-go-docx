@@ -39,6 +39,9 @@ func (d *Document) ToMarkdown() string {
 // Chunks returns ordered chunks ready for RAG ingestion.
 func (d *Document) Chunks() []Chunk {
 	builder := chunkBuilder{}
+	if pocet := d.odhadPoctuChunku(); pocet > 0 {
+		builder.chunks = make([]Chunk, 0, pocet)
+	}
 	for _, id := range sortedBlockKeys(d.Headers) {
 		builder.appendBlocks(d.Headers[id], chunkSource{kind: "header", id: id, path: "headers/" + id})
 	}
@@ -106,33 +109,44 @@ func writeBlocksMarkdown(b *strings.Builder, blocks []Block) {
 }
 
 func paragraphMarkdown(paragraph *Paragraph) string {
-	text := paragraphInlineMarkdown(paragraph)
-	if paragraph.HeadingLvl > 0 {
-		var b strings.Builder
-		b.WriteString(strings.Repeat("#", paragraph.HeadingLvl))
-		b.WriteByte(' ')
-		b.WriteString(text)
-		return b.String()
-	}
 	var b strings.Builder
-	if paragraph.List != nil {
-		b.WriteString(strings.Repeat("  ", paragraph.List.Level))
-		marker := listMarker(paragraph.List)
-		if marker != "" {
+	b.Grow(delkaTextuBehu(paragraph.Runs) + 16)
+	if paragraph.HeadingLvl > 0 {
+		for range paragraph.HeadingLvl {
+			b.WriteByte('#')
+		}
+		b.WriteByte(' ')
+	} else if paragraph.List != nil {
+		for range paragraph.List.Level {
+			b.WriteString("  ")
+		}
+		if marker := listMarker(paragraph.List); marker != "" {
 			b.WriteString(marker)
 			b.WriteByte(' ')
 		}
 	}
-	b.WriteString(text)
+	for _, run := range paragraph.Runs {
+		writeRunMarkdown(&b, run)
+	}
 	return b.String()
 }
 
 func paragraphInlineMarkdown(paragraph *Paragraph) string {
 	var b strings.Builder
+	b.Grow(delkaTextuBehu(paragraph.Runs))
 	for _, run := range paragraph.Runs {
-		b.WriteString(runMarkdown(run))
+		writeRunMarkdown(&b, run)
 	}
 	return b.String()
+}
+
+// delkaTextuBehu sečte délku textu běhů; slouží jako odhad pro Builder.Grow.
+func delkaTextuBehu(runs []Run) int {
+	delka := 0
+	for _, run := range runs {
+		delka += len(run.Text)
+	}
+	return delka
 }
 
 func listMarker(list *ListRef) string {
@@ -181,9 +195,17 @@ func blocksMarkdownInline(blocks []Block) string {
 }
 
 func runMarkdown(run Run) string {
+	var b strings.Builder
+	writeRunMarkdown(&b, run)
+	return b.String()
+}
+
+// writeRunMarkdown zapisuje běh přímo do b, bez mezilehlých řetězců
+// pro každou vrstvu formátování. Pořadí značek odpovídá vnoření
+// **, *, <u>, odkaz (od vnější po vnitřní).
+func writeRunMarkdown(b *strings.Builder, run Run) {
 	switch {
 	case run.Image != nil:
-		altText := escapeMarkdownText(run.Image.AltText)
 		target := run.Image.Filename
 		if target == "" {
 			target = run.Image.ID
@@ -191,31 +213,49 @@ func runMarkdown(run Run) string {
 		if target == "" {
 			target = run.Image.RelID
 		}
-		return "![" + altText + "](" + escapeMarkdownURL(target) + ")"
+		b.WriteString("![")
+		b.WriteString(escapeMarkdownText(run.Image.AltText))
+		b.WriteString("](")
+		b.WriteString(escapeMarkdownURL(target))
+		b.WriteByte(')')
 	case run.Note != nil:
-		return noteMarkdownRef(*run.Note)
+		b.WriteString(noteMarkdownRef(*run.Note))
 	case run.Tab:
-		return "\t"
+		b.WriteByte('\t')
 	case run.Break:
-		return "\n"
+		b.WriteByte('\n')
 	default:
 		text := escapeMarkdownText(run.Text)
 		if text == "" {
-			return ""
-		}
-		if run.Link != "" {
-			text = "[" + text + "](" + escapeMarkdownURL(run.Link) + ")"
-		}
-		if run.Underline {
-			text = "<u>" + text + "</u>"
-		}
-		if run.Italic {
-			text = "*" + text + "*"
+			return
 		}
 		if run.Bold {
-			text = "**" + text + "**"
+			b.WriteString("**")
 		}
-		return text
+		if run.Italic {
+			b.WriteByte('*')
+		}
+		if run.Underline {
+			b.WriteString("<u>")
+		}
+		if run.Link != "" {
+			b.WriteByte('[')
+		}
+		b.WriteString(text)
+		if run.Link != "" {
+			b.WriteString("](")
+			b.WriteString(escapeMarkdownURL(run.Link))
+			b.WriteByte(')')
+		}
+		if run.Underline {
+			b.WriteString("</u>")
+		}
+		if run.Italic {
+			b.WriteByte('*')
+		}
+		if run.Bold {
+			b.WriteString("**")
+		}
 	}
 }
 
@@ -228,16 +268,25 @@ func noteMarkdownRef(note NoteRef) string {
 	}
 }
 
+// znakyMarkdownu jsou znaky, které escapeMarkdownText escapuje.
+const znakyMarkdownu = "\\*_[]`"
+
+// nahrazovacMarkdownu se sestavuje jednou; strings.Replacer je bezpečný
+// pro souběžné použití z více goroutin.
+var nahrazovacMarkdownu = strings.NewReplacer(
+	`\`, `\\`,
+	`*`, `\*`,
+	`_`, `\_`,
+	`[`, `\[`,
+	`]`, `\]`,
+	"`", "\\`",
+)
+
 func escapeMarkdownText(text string) string {
-	replacer := strings.NewReplacer(
-		`\`, `\\`,
-		`*`, `\*`,
-		`_`, `\_`,
-		`[`, `\[`,
-		`]`, `\]`,
-		"`", "\\`",
-	)
-	return replacer.Replace(text)
+	if !strings.ContainsAny(text, znakyMarkdownu) {
+		return text
+	}
+	return nahrazovacMarkdownu.Replace(text)
 }
 
 func escapeMarkdownURL(url string) string {
@@ -311,6 +360,47 @@ type chunkSource struct {
 type chunkBuilder struct {
 	chunks  []Chunk
 	tableID int
+}
+
+// odhadPoctuChunku vrací horní mez počtu chunků ve všech částech dokumentu,
+// aby Chunks alokoval výsledný slice jednou a append ho nemusel zvětšovat.
+// Odstavce s běhy, ale bez textu, chunk nevytvoří, proto jde o horní mez,
+// ne o přesný počet.
+func (d *Document) odhadPoctuChunku() int {
+	pocet := pocetChunkuBloku(d.Body)
+	for _, casti := range []map[string][]Block{d.Headers, d.Footers, d.Footnotes, d.Endnotes} {
+		for _, bloky := range casti {
+			pocet += pocetChunkuBloku(bloky)
+		}
+	}
+	return pocet
+}
+
+func pocetChunkuBloku(blocks []Block) int {
+	pocet := 0
+	for _, block := range blocks {
+		switch value := block.(type) {
+		case *Paragraph:
+			// Odstavec bez běhů, který není nadpis ani položka seznamu,
+			// má prázdný text i Markdown, a appendParagraph ho vynechá.
+			if len(value.Runs) > 0 || value.HeadingLvl > 0 || value.List != nil {
+				pocet++
+			}
+			for _, run := range value.Runs {
+				if run.Image != nil {
+					pocet++
+				}
+			}
+		case *Table:
+			for _, row := range value.Grid {
+				pocet++
+				for _, cell := range row {
+					pocet += pocetChunkuBloku(cell.Blocks)
+				}
+			}
+		}
+	}
+	return pocet
 }
 
 func (b *chunkBuilder) appendBlocks(blocks []Block, source chunkSource) {
@@ -463,6 +553,7 @@ func rowMarkdown(row []Cell) string {
 
 func paragraphText(paragraph *Paragraph) string {
 	var b strings.Builder
+	b.Grow(delkaTextuBehu(paragraph.Runs))
 	for _, run := range paragraph.Runs {
 		writeRunText(&b, run)
 	}

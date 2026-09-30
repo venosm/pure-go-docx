@@ -1,10 +1,8 @@
 # DOCX Fixtures
 
-Two kinds of fixtures live here:
-
-- Generated English fixtures, produced by `testdata/gen` and covering one
-  parser feature area each.
-- Real-world Czech procurement samples, used by `TestRealDocxFixtures`.
+Generated English fixtures and one real-world Word document live here. The
+generated fixtures are produced by `testdata/gen` and cover one parser feature
+area each.
 
 The unit tests in `internal/` still synthesize focused DOCX archives in memory.
 The fixtures below cover the packaging layer that in-memory tests skip: content
@@ -44,11 +42,9 @@ working tree clean. List the fixtures without writing files with
 header part and another relationship from the body, so part-scoped image IDs
 (`word/header2.xml#rId1`) are exercised rather than only bare relationship IDs.
 
-## Real-World Czech Fixtures
+## Real-World Fixture
 
-- `Priloha c. 1 - Formular nabidky - PROHLASENI DODAVATELE - vzor.docx`
-- `Priloha c. 2 – Smlouva – vzor.docx`
-
-These are Word-authored procurement documents. They cover markup that
-hand-written fixtures do not reproduce faithfully, such as Word's own style and
-numbering definitions.
+`service-contract-sample.docx` is a Word-authored service contract copied from
+`Service Contract Sample.docx`. It exercises the parser on a document with
+headers, footers, and embedded media. It is tested by `TestDocxFixtures` and
+included in the parsing, rendering, chunking, and image benchmarks.

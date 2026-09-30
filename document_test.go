@@ -13,11 +13,11 @@ func TestOpenReaderParagraphsAndText(t *testing.T) {
 	data := testutil.BuildDocx(t, `
 <w:p>
   <w:pPr><w:pStyle w:val="Heading1"/></w:pPr>
-  <w:r><w:t>Nadpis</w:t></w:r>
+  <w:r><w:t>Heading</w:t></w:r>
 </w:p>
 <w:p>
-  <w:r><w:rPr><w:b/><w:i/></w:rPr><w:t xml:space="preserve">slovo </w:t></w:r>
-  <w:r><w:t>stěna</w:t><w:tab/><w:t>řádek</w:t><w:br/><w:t>nový</w:t></w:r>
+  <w:r><w:rPr><w:b/><w:i/></w:rPr><w:t xml:space="preserve">word </w:t></w:r>
+  <w:r><w:t>wall</w:t><w:tab/><w:t>line</w:t><w:br/><w:t>new</w:t></w:r>
 </w:p>`, "")
 
 	doc, err := OpenReader(bytes.NewReader(data), int64(len(data)))
@@ -35,7 +35,7 @@ func TestOpenReaderParagraphsAndText(t *testing.T) {
 	if heading.StyleID != "Heading1" || heading.HeadingLvl != 1 {
 		t.Fatalf("heading style = %q level %d, want Heading1 level 1", heading.StyleID, heading.HeadingLvl)
 	}
-	if got, want := doc.ToText(), "Nadpis\nslovo stěna\třádek\nnový\n"; got != want {
+	if got, want := doc.ToText(), "Heading\nword wall\tline\nnew\n"; got != want {
 		t.Fatalf("ToText() = %q, want %q", got, want)
 	}
 }
@@ -82,7 +82,7 @@ func TestOpenReaderImages(t *testing.T) {
     <w:drawing>
       <wp:inline>
         <wp:extent cx="914400" cy="914400"/>
-        <wp:docPr id="1" name="image" descr="schema zakazky"/>
+        <wp:docPr id="1" name="image" descr="procurement diagram"/>
         <a:graphic>
           <a:graphicData>
             <pic:pic>
@@ -116,8 +116,8 @@ func TestOpenReaderImages(t *testing.T) {
 	if image.ContentType != "image/png" {
 		t.Fatalf("Image().ContentType = %q, want image/png", image.ContentType)
 	}
-	if image.AltText != "schema zakazky" {
-		t.Fatalf("Image().AltText = %q, want schema zakazky", image.AltText)
+	if image.AltText != "procurement diagram" {
+		t.Fatalf("Image().AltText = %q, want procurement diagram", image.AltText)
 	}
 
 	images, err := doc.AllImages()

@@ -23,80 +23,80 @@
 - [x] Milestone 3 renders field display values without field instructions
 - [x] Verification passes: `make tidy`, `make test`, `make lint`, `make build`, `go vet ./...`
 
-## Kroky (Thin Slices)
+## Steps (Thin Slices)
 
 ### Slice 1: Skeleton and Test Helper
-- [x] Implementace
+- [x] Implementation
 - [x] Test
-- [x] Verifikace: `make test`
+- [x] Verification: `make test`
 
 ### Slice 2: OPC Loading
-- [x] Implementace
+- [x] Implementation
 - [x] Test
-- [x] Verifikace: `make test`
+- [x] Verification: `make test`
 
 ### Slice 3: Body Parser
-- [x] Implementace
+- [x] Implementation
 - [x] Test
-- [x] Verifikace: `make test`
+- [x] Verification: `make test`
 
 ### Slice 4: Public API and Rendering
-- [x] Implementace
+- [x] Implementation
 - [x] Test
-- [x] Verifikace: `make test`
+- [x] Verification: `make test`
 
 ### Milestone 2 Task 1: Numbering Resolver
-- [x] Implementace
+- [x] Implementation
 - [x] Test
-- [x] Verifikace: `go test ./internal/numbering`
+- [x] Verification: `go test ./internal/numbering`
 
 ### Milestone 2 Task 2: Numbering Wire-Up
-- [x] Implementace
+- [x] Implementation
 - [x] Test
-- [x] Verifikace: `go test -run 'TestParagraph_' .`
+- [x] Verification: `go test -run 'TestParagraph_' .`
 
 ### Milestone 2 Task 3: Table Merge Resolution
-- [x] Implementace
+- [x] Implementation
 - [x] Test
-- [x] Verifikace: `go test -run 'TestTable_' .`
+- [x] Verification: `go test -run 'TestTable_' .`
 
 ### Milestone 2 Task 4: ToText Rendering
-- [x] Implementace
+- [x] Implementation
 - [x] Test
-- [x] Verifikace: `go test -run 'TestToText_|TestFormatOrdinal' .`
+- [x] Verification: `go test -run 'TestToText_|TestFormatOrdinal' .`
 
 ### Milestone 3 Task 1: Parser Support
-- [x] Implementace
+- [x] Implementation
 - [x] Test
-- [x] Verifikace: `go test ./...`
+- [x] Verification: `go test ./...`
 
 ### Milestone 3 Task 2: Related DOCX Parts
-- [x] Implementace
+- [x] Implementation
 - [x] Test
-- [x] Verifikace: `go test ./...`
+- [x] Verification: `go test ./...`
 
 ### Milestone 3 Task 3: Markdown and Chunks
-- [x] Implementace
+- [x] Implementation
 - [x] Test
-- [x] Verifikace: `go test ./...`
+- [x] Verification: `go test ./...`
 
 ## Checkpoints
-- [2026-05-24] Rozhodnuti: projekt je samostatny Go modul v adresari `pure-go-docx`.
-- [2026-05-25] Rozhodnuti: module path je `github.com/venosm/pure-go-docx` a Go directive je `go 1.26`.
-- [2026-05-24] Zjisteni: Go `encoding/xml` stream parser handles DOCX namespace URIs correctly when switching by `Name.Local` after root validation.
-- [2026-05-25] Rozhodnuti: Milestone 2 zacina izolovane balickem `internal/numbering`; parser tela dokumentu zatim zustava bez zmen.
-- [2026-05-25] Zjisteni: `numFmt="none"` musi vynutit prazdny `LevelText`, aby pozdejsi renderer nevytvoril prefix.
-- [2026-05-25] Rozhodnuti: numbering part se nacita pres relationship target hlavniho dokumentu, ne pres pevnou cestu `word/numbering.xml`.
-- [2026-05-25] Rozhodnuti: horizontalni merge se v dense gridu reprezentuje origin cell + prazdne pokryte sloupce, aby se text neopakoval.
-- [2026-05-25] Zjisteni: vMerge continuation sdili `Blocks` s originem, aby kazdy radek tabulky byl samostatne smysluplny pro RAG.
-- [2026-05-26] Zjisteni: parser zatim akceptuje jen `w:document/w:body`; milestone 3 vyzaduje znovupouzitelne parsovani rootu `w:hdr`, `w:ftr`, `w:footnotes` a `w:endnotes`.
-- [2026-05-26] Rozhodnuti: `ToText` zustane kompatibilni jako linearizace hlavniho tela, zatimco `ToMarkdown` a `Chunks` zahrnou souvisejici casti pro RAG.
-- [2026-05-26] Rozhodnuti: obrazky v hlavnim tele zustavaji dostupne pres puvodni `rId`, obrazky v souvisejicich castech pouzivaji part-aware ID ve tvaru `word/header1.xml#rIdImage`.
-- [2026-05-26] Zjisteni: `mc:AlternateContent` muze obalit bloky, run obsah i kresby; parser vybira prvni `Choice` a pri jeho absenci `Fallback`.
+- [2026-05-24] Decision: the project is a standalone Go module in the `pure-go-docx` directory.
+- [2026-05-25] Decision: the module path is `github.com/venosm/pure-go-docx` and the Go directive is `go 1.26`.
+- [2026-05-24] Finding: Go's `encoding/xml` stream parser handles DOCX namespace URIs correctly when switching by `Name.Local` after root validation.
+- [2026-05-25] Decision: Milestone 2 starts with the isolated `internal/numbering` package; the document body parser remains unchanged for now.
+- [2026-05-25] Finding: `numFmt="none"` must force an empty `LevelText` so the renderer does not add a prefix.
+- [2026-05-25] Decision: load the numbering part through the main document's relationship target, instead of a fixed `word/numbering.xml` path.
+- [2026-05-25] Decision: represent a horizontal merge in the dense grid as the origin cell and empty covered columns so text is not repeated.
+- [2026-05-25] Finding: a vMerge continuation shares `Blocks` with the origin so each table row is independently useful for RAG.
+- [2026-05-26] Finding: the parser currently accepts only `w:document/w:body`; Milestone 3 requires reusable parsing of `w:hdr`, `w:ftr`, `w:footnotes`, and `w:endnotes` roots.
+- [2026-05-26] Decision: keep `ToText` compatible as a linear rendering of the main body, while `ToMarkdown` and `Chunks` include related parts for RAG.
+- [2026-05-26] Decision: images in the main body remain accessible by their original `rId`; images in related parts use part-aware IDs such as `word/header1.xml#rIdImage`.
+- [2026-05-26] Finding: `mc:AlternateContent` can wrap blocks, run content, and drawings; the parser chooses the first `Choice` or `Fallback` if no choice exists.
 
-## Vysledky
+## Results
 
-### Zmenene soubory
+### Changed Files
 - `doc.go`, `document.go`, `types.go`, `render.go` - public API, lazy image loading, text/markdown/chunk rendering.
 - `internal/opc/` - OPC zip abstraction, content types, relationships, size limits.
 - `internal/body/` - streaming body parser for paragraphs, runs, tables, SDT content, and drawing image references.
@@ -112,7 +112,7 @@
 - `document_test.go`, `paragraph_test.go`, `render_test.go`, `internal/testutil/docx.go` - Milestone 3 synthetic DOCX regressions and helpers.
 - `README.md` - Milestone 3 implemented status and API documentation.
 
-### Verifikace
+### Verification
 - `make tidy` - PASS
 - `make test` - PASS
 - `make lint` - PASS
